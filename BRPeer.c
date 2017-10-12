@@ -489,7 +489,7 @@ static int _BRPeerAcceptHeadersMessage(BRPeer *peer, const uint8_t *msg, size_t 
                     BRMerkleBlockFree(block);
                     r = 0;
                 }
-                else if (ctx->relayedBlock) {
+                if (ctx->relayedBlock) {
                     ctx->relayedBlock(ctx->info, block);
                 }
                 else BRMerkleBlockFree(block);
@@ -844,7 +844,7 @@ static int _BRPeerAcceptMessage(BRPeer *peer, const uint8_t *msg, size_t msgLen,
 
 static int _BRPeerOpenSocket(BRPeer *peer, double timeout, int *error)
 {
-    struct sockaddr_storage addr;
+    struct sockaddr addr;
     struct timeval tv;
     fd_set fds;
     socklen_t addrLen, optLen;
@@ -856,21 +856,22 @@ static int _BRPeerOpenSocket(BRPeer *peer, double timeout, int *error)
 
     if (r) {
         memset(&addr, 0, sizeof(addr));
-        ((struct sockaddr_in6 *)&addr)->sin6_family = AF_INET6;
-        ((struct sockaddr_in6 *)&addr)->sin6_addr = *(struct in6_addr *)&peer->address;
-        ((struct sockaddr_in6 *)&addr)->sin6_port = htons(peer->port);
-        addrLen = sizeof(struct sockaddr_in6);
-        if (connect(socket, (struct sockaddr *)&addr, addrLen) < 0) err = errno;
-
-        if (err && err != EINPROGRESS && _BRPeerIsIPv4(peer)) {
-            err = 0;
+        
+        if (_BRPeerIsIPv4(peer)) {
             ((struct sockaddr_in *)&addr)->sin_family = AF_INET;
             ((struct sockaddr_in *)&addr)->sin_addr = *(struct in_addr *)&peer->address.u32[3];
             ((struct sockaddr_in *)&addr)->sin_port = htons(peer->port);
             addrLen = sizeof(struct sockaddr_in);
-            if (connect(socket, (struct sockaddr *)&addr, addrLen) < 0) err = errno;
         }
-        
+        else {
+            ((struct sockaddr_in6 *)&addr)->sin6_family = AF_INET6;
+            ((struct sockaddr_in6 *)&addr)->sin6_addr = *(struct in6_addr *)&peer->address;
+            ((struct sockaddr_in6 *)&addr)->sin6_port = htons(peer->port);
+            addrLen = sizeof(struct sockaddr_in6);
+        }
+
+        if (connect(socket, &addr, addrLen) < 0) err = errno;
+
         if (err == EINPROGRESS) {
             err = 0;
             optLen = sizeof(err);
@@ -886,7 +887,6 @@ static int _BRPeerOpenSocket(BRPeer *peer, double timeout, int *error)
                 r = 0;
             }
         }
-        else if (err) r = 0;
 
         if (r) peer_log(peer, "socket connected");
         fcntl(socket, F_SETFL, arg); // restore socket non-blocking status

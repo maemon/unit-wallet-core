@@ -65,8 +65,8 @@ static const struct { uint32_t height; const char *hash; uint32_t timestamp; uin
 };
 
 static const char *dns_seeds[] = {
-    "testnet-seed.breadwallet.com.", "testnet-seed.bitcoin.petertodd.org.", "testnet-seed.bluematt.me.",
-    "testnet-seed.bitcoin.schildbach.de."
+         "seed.bitcoinabc.org.", "seed-abc.bitcoinforks.org.", "btccash-seeder.bitcoinunlimited.info."
+
 };
 
 #else // main net
@@ -101,10 +101,9 @@ static const struct { uint32_t height; const char *hash; uint32_t timestamp; uin
 };
 
 static const char *dns_seeds[] = {
-    "seed.breadwallet.com.", "seed.bitcoin.sipa.be.", "dnsseed.bluematt.me.", "dnsseed.bitcoin.dashjr.org.",
-    "seed.bitcoinstats.com.", "bitseed.xf2.org.", "seed.bitcoin.jonasschnelli.ch."
-};
+        "seed.bitcoinabc.org.", "seed-abc.bitcoinforks.org.", "btccash-seeder.bitcoinunlimited.info."
 
+};
 #endif
 
 typedef struct {
@@ -715,9 +714,9 @@ static UInt128 *_addressLookup(const char *hostname)
                 addrList[i].u32[3] = ((struct sockaddr_in *)p->ai_addr)->sin_addr.s_addr;
                 i++;
             }
-            else if (p->ai_family == AF_INET6) {
-                addrList[i++] = *(UInt128 *)&((struct sockaddr_in6 *)p->ai_addr)->sin6_addr;
-            }
+//            else if (p->ai_family == AF_INET6) {
+//                addrList[i++] = *(UInt128 *)&((struct sockaddr_in6 *)p->ai_addr)->sin6_addr;
+//            }
         }
         
         freeaddrinfo(servinfo);
@@ -815,8 +814,8 @@ static void _peerConnected(void *info)
         peer_log(peer, "node isn't synced");
         BRPeerDisconnect(peer);
     }
-    else if ((peer->services & SERVICES_NODE_BCASH) == SERVICES_NODE_BCASH) {
-        peer_log(peer, "b-cash nodes not supported");
+    else if (!(peer->services & SERVICES_NODE_BCASH) == SERVICES_NODE_BCASH) {
+        peer_log(peer, "non b-cash nodes not supported");
         BRPeerDisconnect(peer);
     }
     else if (BRPeerVersion(peer) >= 70011 && ! (peer->services & SERVICES_NODE_BLOOM)) {
@@ -1202,12 +1201,7 @@ static int _BRPeerManagerVerifyBlock(BRPeerManager *manager, BRMerkleBlock *bloc
         }
     }
 
-    // verify block difficulty
-    if (r && ! BRMerkleBlockVerifyDifficulty(block, prev, transitionTime)) {
-        peer_log(peer, "relayed block with invalid difficulty target %x, blockHash: %s", block->target,
-                 u256_hex_encode(block->blockHash));
-        r = 0;
-    }
+
     
     if (r) {
         BRMerkleBlock *checkpoint = BRSetGet(manager->checkpoints, block);
