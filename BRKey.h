@@ -95,6 +95,9 @@ size_t BRKeyAddress(BRKey *key, char *addr, size_t addrLen);
 // returns the number of bytes written, or sigLen needed if sig is NULL
 // returns 0 on failure
 size_t BRKeySign(const BRKey *key, void *sig, size_t sigLen, UInt256 md);
+size_t BRKeyAddressp2p(BRKey *key, char *addr, size_t addrLen);
+size_t BRKeyAddressp2sh(BRKey *key, char *addr, size_t addrLen);
+
 
 // returns true if the signature for md is verified to have been made by key
 int BRKeyVerify(BRKey *key, UInt256 md, const void *sig, size_t sigLen);
