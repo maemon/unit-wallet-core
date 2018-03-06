@@ -803,6 +803,7 @@ static void _peerConnected(void *info)
     time_t now = time(NULL);
     
     pthread_mutex_lock(&manager->lock);
+
     if (peer->timestamp > now + 2*60*60 || peer->timestamp < now - 2*60*60) peer->timestamp = now; // sanity check
     
     // TODO: XXX does this work with 0.11 pruned nodes?
@@ -822,6 +823,7 @@ static void _peerConnected(void *info)
         peer_log(peer, "node doesn't support SPV mode");
         BRPeerDisconnect(peer);
     }
+
     else if (manager->downloadPeer && // check if we should stick with the existing download peer
              (BRPeerLastBlock(manager->downloadPeer) >= BRPeerLastBlock(peer) ||
               manager->lastBlock->height >= BRPeerLastBlock(peer))) {

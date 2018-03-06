@@ -25,12 +25,12 @@
 #include "BRMerkleBlock.h"
 #include "BRCrypto.h"
 #include "BRAddress.h"
+#include "BRInt.h"
 #include <stdlib.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <string.h>
 #include <assert.h>
-
 #define MAX_PROOF_OF_WORK 0x1d00ffff    // highest value for difficulty target (higher values are less difficult)
 #define TARGET_TIMESPAN   (14*24*60*60) // the targeted timespan between difficulty target adjustments
 
@@ -82,6 +82,181 @@ BRMerkleBlock *BRMerkleBlockNew(void)
     block->height = BLOCK_UNKNOWN_HEIGHT;
     return block;
 }
+
+GetAncestor(int height, int currentHeight, BRMerkleBlock *thisBlk) {
+    int nHeight = thisBlk->height-1;
+    if (height > currentHeight || height < 0) {
+        return NULL;
+    }
+
+    BRMerkleBlock *pindexWalk = thisBlk;
+    int heightWalk = nHeight;
+    while (heightWalk > height) {
+        int heightSkip = GetSkipHeight(heightWalk);
+        int heightSkipPrev = GetSkipHeight(heightWalk - 1);
+
+       /* if (GetAncestor(GetSkipHeight(nHeight),thisBlk->height, thisBlk) != NULL &&
+            (heightSkip == height || (heightSkip > height &&
+                                      !(heightSkipPrev < heightSkip - 2 &&
+                                        heightSkipPrev >= height)))) {
+            // Only follow pskip if pprev->pskip isn't better than pskip->pprev.
+            pindexWalk = &pindexWalk->prevBlock;
+            heightWalk = heightSkip;
+        } else {*/
+            assert(&pindexWalk->prevBlock);
+            pindexWalk = &pindexWalk->prevBlock;
+            heightWalk--;
+       // }
+    }
+    return pindexWalk;
+}
+
+
+//Math Functions
+#define uint256_supeq(a, b) (a.u64[3] > b.u64[3]) || ((a.u64[3] == b.u64[3]) && ((a.u64[2] > b.u64[2]) || ((a.u64[2] == b.u64[2]) && ((a.u64[1] > b.u64[1]) || ((a.u64[1] == b.u64[1]) && (a.u64[0] >= b.u64[0]))))))
+UInt256 shiftLeft(UInt256 a, uint8_t bits) {
+    UInt256 r = UINT256_ZERO;
+    int k = bits / 64;
+    bits = bits % 64;
+    for (int i = 0; i < 4; i++) {
+        if (i + k + 1 < 4 && bits != 0)
+            r.u64[i + k + 1] |= (a.u64[i] >> (64 - bits));
+        if (i + k < 4)
+            r.u64[i + k] |= (a.u64[i] << bits);
+    }
+    return r;
+}
+
+UInt256 shiftRight(UInt256 a, uint8_t bits) {
+    UInt256 r = UINT256_ZERO;
+    int k = bits / 64;
+    bits = bits % 64;
+    for (int i = 0; i < 4; i++) {
+        if (i - k - 1 >= 0 && bits != 0)
+            r.u64[i - k - 1] |= (a.u64[i] << (64 - bits));
+        if (i - k >= 0)
+            r.u64[i - k] |= (a.u64[i] >> bits);
+    }
+    return r;
+}
+
+
+
+UInt256 setCompact(int32_t nCompact)
+{
+    int nSize = nCompact >> 24;
+    UInt256 nWord = UINT256_ZERO;
+    nWord.u32[0] =  nCompact & (uint32_t)0x007fffff;
+    if (nSize <= 3) {
+        nWord = shiftRight(nWord,(uint8_t) 8 * (3 - nSize));
+    } else {
+        nWord = shiftLeft(nWord,(uint8_t)( 8 * (nSize - 3)));
+    }
+    return nWord;
+}
+
+uint8_t bits(UInt256 number)
+{
+    for (int pos = 8 - 1; pos >= 0; pos--) {
+        if (number.u32[pos]) {
+            for (int bits = 31; bits > 0; bits--) {
+                if (number.u32[pos] & 1 << bits)
+                    return 32 * pos + bits + 1;
+            }
+            return 32 * pos + 1;
+        }
+    }
+    return 0;
+}
+
+int32_t getCompact(UInt256 number)
+{
+    int nSize = (bits(number) + 7) / 8;
+    uint32_t nCompact = 0;
+    if (nSize <= 3) {
+        nCompact = number.u32[0] << 8 * (3 - nSize);
+    } else {
+        UInt256 bn = shiftRight(number,(uint8_t) (8 * (nSize - 3)));
+        nCompact = bn.u32[0];
+    }
+    // The 0x00800000 bit denotes the sign.
+    // Thus, if it is already set, divide the mantissa by 256 and increase the exponent.
+    if (nCompact & 0x00800000) {
+        nCompact >>= 8;
+        nSize++;
+    }
+//    assert((nCompact & ~0x007fffff) == 0);
+    assert(nSize < 256);
+    nCompact |= nSize << 24;
+    return nCompact;
+}
+
+UInt256 add(UInt256 a, UInt256 b) {
+    uint64_t carry = 0;
+    UInt256 r = UINT256_ZERO;
+    for (int i = 0; i < 8; i++) {
+        uint64_t sum = (uint64_t)a.u32[i] + (uint64_t)b.u32[i] + carry;
+        r.u32[i] = (uint32_t)sum;
+        carry = sum >> 32;
+    }
+    return r;
+}
+
+UInt256 addOne(UInt256 a) {
+    UInt256 r = ((UInt256) { .u64 = { 1, 0, 0, 0 } });
+    return add(a, r);
+}
+
+UInt256 neg(UInt256 a) {
+    UInt256 r = UINT256_ZERO;
+    for (int i = 0; i < 4; i++) {
+        r.u64[i] = ~a.u64[i];
+    }
+    return r;
+}
+
+UInt256 subtract(UInt256 a, UInt256 b) {
+    return add(a,addOne(neg(b)));
+}
+
+
+UInt256 divide (UInt256 a,UInt256 b)
+{
+    UInt256 div = b;     // make a copy, so we can shift.
+    UInt256 num = a;     // make a copy, so we can subtract.
+    UInt256 r = UINT256_ZERO;                  // the quotient.
+    int num_bits = bits(num);
+    int div_bits = bits(div);
+    assert (div_bits != 0);
+    if (div_bits > num_bits) // the result is certainly 0.
+        return r;
+    uint8_t shift = num_bits - div_bits;
+    UInt256 temp =shiftLeft(div, shift); // shift so that div and nun align.
+    div = temp;
+    while (shift >= 0) {
+        if (uint256_supeq(num,div)) {
+            num = subtract(num,div);
+            r.u32[shift / 32] |= (1 << (shift & 31)); // set a bit of the result.
+        }
+        div = shiftRight(div, 1); // shift back.
+        shift--;
+    }
+    // num now contains the remainder of the division.
+    return r;
+}
+
+UInt256 multiplyThis32 (UInt256 a,uint32_t b)
+{
+    uint64_t carry = 0;
+    for (int i = 0; i < 8; i++) {
+        uint64_t n = carry + (uint64_t)b * (uint64_t)a.u32[i];
+        a.u32[i] = n & 0xffffffff;
+        carry = n >> 32;
+    }
+    return a;
+}
+
+
 
 // buf must contain either a serialized merkleblock or header
 // returns a merkle block struct that must be freed by calling BRMerkleBlockFree()
@@ -250,6 +425,39 @@ static UInt256 _BRMerkleBlockRootR(const BRMerkleBlock *block, size_t *hashIdx, 
     return md;
 }
 
+//enum { nMedianTimeSpan = 11 };
+void Csort(int *number, int n) {
+
+    /* Sort the given array number, of length n */
+    int temp = 0, j, i;
+
+    for (i = 1; i < n; i++) {
+        for (j = 0; j < n - i; j++) {
+            if (number[j] > number[j + 1]) {
+                temp = number[j];
+                number[j] = number[j + 1];
+                number[j + 1] = temp;
+            }
+        }
+    }
+}
+
+
+int64_t GetMedianTimePast(BRMerkleBlock *pindex) {
+    int64_t pmedian[11];
+    int64_t *pbegin = &pmedian[11];
+    int64_t *pend = &pmedian[11];
+
+   // const BRMerkleBlock *pindex = this;
+    for (int i = 0; i < 11 && pindex;
+         i++, pindex = pindex->prevBlock.u64) {
+        *(--pbegin) = pindex->height;
+    }
+
+    Csort(pbegin, pend);
+    return pbegin[(pend - pbegin) / 2];
+}
+
 // true if merkle tree and timestamp are valid, and proof-of-work matches the stated difficulty target
 // NOTE: this only checks if the block difficulty matches the difficulty target in the header, it does not check if the
 // target is correct for the block's height in the chain - use BRMerkleBlockVerifyDifficulty() for that
@@ -264,7 +472,11 @@ int BRMerkleBlockIsValid(const BRMerkleBlock *block, uint32_t currentTime)
     size_t hashIdx = 0, flagIdx = 0;
     UInt256 merkleRoot = _BRMerkleBlockRootR(block, &hashIdx, &flagIdx, 0), t = UINT256_ZERO;
     int r = 1;
-    
+
+
+
+
+
     // check if merkle root is correct
     if (block->totalTx > 0 && ! UInt256Eq(merkleRoot, block->merkleRoot)) r = 0;
     
@@ -299,6 +511,24 @@ int BRMerkleBlockContainsTxHash(const BRMerkleBlock *block, UInt256 txHash)
     
     return r;
 }
+
+static inline int InvertLowestOne(int n) {
+    return n & (n - 1);
+}
+ int GetSkipHeight(int height) {
+    if (height < 2) {
+        return 0;
+    }
+
+    // Determine which height to jump back to. Any number strictly lower than
+    // height is acceptable, but the following expression seems to perform well
+    // in simulations (max 110 steps to go back up to 2**18 blocks).
+    return (height & 1) ? InvertLowestOne(InvertLowestOne(height - 1)) + 1
+                        : InvertLowestOne(height);
+}
+
+
+
 
 // verifies the block difficulty target is correct for the block's position in the chain
 // transitionTime is the timestamp of the block at the previous difficulty transition
@@ -342,18 +572,73 @@ int BRMerkleBlockVerifyDifficulty(const BRMerkleBlock *block, const BRMerkleBloc
         target *= timespan;
         target /= TARGET_TIMESPAN >> 8;
         size--; // decrement size since we only divided by TARGET_TIMESPAN/256
-    
         while (size < 1 || target > 0x007fffff) target >>= 8, size++; // normalize target for "compact" format
     
         // limit to MAX_PROOF_OF_WORK
         if (size > maxsize || (size == maxsize && target > maxtarget)) target = maxtarget, size = maxsize;
     
         if (block->target != ((uint32_t)target | size << 24)) r = 0;
+
+
     }
     else if (r && block->target != previous->target) r = 0;
-    
+
+   /* // If producing the last 6 block took less than 12h, we keep the same
+    // difficulty.
+
+    //Note get the ancestor!
+    const BRMerkleBlock *pindex6 = GetAncestor(previous->height-7, previous->height, previous);
+
+    int64_t mtp6blocks = GetMedianTimePast(previous) - GetMedianTimePast(pindex6);
+    if (mtp6blocks < (12*3600))
+        r=0;
+    else r=1;
+
+        UInt256 nPow;
+    getCompact(nPow);
+    nPow =add(nPow, (shiftRight(nPow, 2)));
+
+    UInt256 bnPowLimit = setCompact(MAX_PROOF_OF_WORK);
+    uint32_t nPowCompare = getCompact(nPow);
+    if (nPowCompare > MAX_PROOF_OF_WORK){ nPow = bnPowLimit;
+        r= 0;}
+*/
+
     return r;
 }
+/*
+uint32_t GetNextCashWorkRequired(const BRMerkleBlock *block, const BRMerkleBlock *previous, uint32_t transitionTime) {
+// This cannot handle the genesis block and early blocks in general.
+assert(pindexPrev);
+
+
+
+// Compute the difficulty based on the full adjustement interval.
+const uint32_t nHeight = previous->height;
+assert(nHeight >= params.DifficultyAdjustmentInterval());
+
+// Get the last suitable block of the difficulty interval.
+const BRMerkleBlock *pindexLast = GetSuitableBlock(previous);
+assert(pindexLast);
+
+// Get the first suitable block of the difficulty interval.
+uint32_t nHeightFirst = nHeight - 144;
+const BRMerkleBlock *pindexFirst =
+        GetSuitableBlock(GetAncestor(pindexLast));
+assert(pindexFirst);
+
+// Compute the target based on time and work done during the interval.
+const arith_uint256 nextTarget =
+        ComputeTarget(pindexFirst, pindexLast, params);
+
+const UInt256 powLimit = UintToArith256(params.powLimit);
+if (nextTarget > powLimit) {
+return powLimit.GetCompact();
+}
+
+return nextTarget.GetCompact();
+}*/
+
 
 // frees memory allocated by BRMerkleBlockParse
 void BRMerkleBlockFree(BRMerkleBlock *block)

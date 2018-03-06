@@ -305,6 +305,57 @@ size_t BRKeyAddress(BRKey *key, char *addr, size_t addrLen)
     return addrLen;
 }
 
+
+size_t BRKeyAddressp2p(BRKey *key, char *addr, size_t addrLen)
+{
+    UInt160 hash;
+    uint8_t data[21];
+
+    assert(key != NULL);
+
+    hash = BRKeyHash160(key);
+    data[0] = 28;
+#if BITCOIN_TESTNET
+    data[0] = BITCOIN_PUBKEY_ADDRESS_TEST;
+#endif
+    UInt160Set(&data[1], hash);
+
+    if (! UInt160IsZero(hash)) {
+        addrLen = BRBase58CheckEncode(addr, addrLen, data, sizeof(data));
+    }
+    else addrLen = 0;
+
+    return addrLen;
+}
+
+
+size_t BRKeyAddressp2sh(BRKey *key, char *addr, size_t addrLen)
+{
+    UInt160 hash;
+    uint8_t data[21];
+
+    assert(key != NULL);
+
+    hash = BRKeyHash160(key);
+    data[0] = 40;
+#if BITCOIN_TESTNET
+    data[0] = BITCOIN_PUBKEY_ADDRESS_TEST;
+#endif
+    UInt160Set(&data[1], hash);
+
+    if (! UInt160IsZero(hash)) {
+        addrLen = BRBase58CheckEncode(addr, addrLen, data, sizeof(data));
+    }
+    else addrLen = 0;
+
+    return addrLen;
+}
+
+
+
+
+
+
 // signs md with key and writes signature to sig
 // returns the number of bytes written, or sigLen needed if sig is NULL
 // returns 0 on failure
