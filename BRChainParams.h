@@ -97,7 +97,7 @@ static const BRCheckPoint BRTestNetCheckpoints[] = {
 static const BRChainParams BRMainNetParams = {
     BRMainNetDNSSeeds,
     8333,       // standardPort
-    0xd9b4bef9, // magicNumber
+    0xe8f3e1e3, // magicNumber
     0,          // services
     BRMerkleBlockVerifyDifficulty,
     BRMainNetCheckpoints,
@@ -107,7 +107,7 @@ static const BRChainParams BRMainNetParams = {
 static const BRChainParams BRTestNetParams = {
     BRTestNetDNSSeeds,
     18333,      // standardPort
-    0x0709110b, // magicNumber
+    0xf4f3e5f4, // magicNumber
     0,          // services
     BRMerkleBlockVerifyDifficultyTestNet,
     BRTestNetCheckpoints,
