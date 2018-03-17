@@ -26,13 +26,16 @@
 #include "BRCrypto.h"
 #include "BRAddress.h"
 #include "BRInt.h"
+#include "BRSet.h"
 #include <stdlib.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <string.h>
 #include <assert.h>
+
 #define MAX_PROOF_OF_WORK 0x1d00ffff    // highest value for difficulty target (higher values are less difficult)
-#define TARGET_TIMESPAN   (14*24*60*60) // the targeted timespan between difficulty target adjustments
+#define TARGET_SPACING    600           // 10-minutes block interval
+#define DAA_HEIGHT        504031        // D601 hard fork height: https://reviews.bitcoinabc.org/D601
 
 inline static int _ceil_log2(int x)
 {
@@ -83,34 +86,6 @@ BRMerkleBlock *BRMerkleBlockNew(void)
     return block;
 }
 
-GetAncestor(int height, int currentHeight, BRMerkleBlock *thisBlk) {
-    int nHeight = thisBlk->height-1;
-    if (height > currentHeight || height < 0) {
-        return NULL;
-    }
-
-    BRMerkleBlock *pindexWalk = thisBlk;
-    int heightWalk = nHeight;
-    while (heightWalk > height) {
-        int heightSkip = GetSkipHeight(heightWalk);
-        int heightSkipPrev = GetSkipHeight(heightWalk - 1);
-
-       /* if (GetAncestor(GetSkipHeight(nHeight),thisBlk->height, thisBlk) != NULL &&
-            (heightSkip == height || (heightSkip > height &&
-                                      !(heightSkipPrev < heightSkip - 2 &&
-                                        heightSkipPrev >= height)))) {
-            // Only follow pskip if pprev->pskip isn't better than pskip->pprev.
-            pindexWalk = &pindexWalk->prevBlock;
-            heightWalk = heightSkip;
-        } else {*/
-            assert(&pindexWalk->prevBlock);
-            pindexWalk = &pindexWalk->prevBlock;
-            heightWalk--;
-       // }
-    }
-    return pindexWalk;
-}
-
 
 //Math Functions
 #define uint256_supeq(a, b) (a.u64[3] > b.u64[3]) || ((a.u64[3] == b.u64[3]) && ((a.u64[2] > b.u64[2]) || ((a.u64[2] == b.u64[2]) && ((a.u64[1] > b.u64[1]) || ((a.u64[1] == b.u64[1]) && (a.u64[0] >= b.u64[0]))))))
@@ -142,7 +117,7 @@ UInt256 shiftRight(UInt256 a, uint8_t bits) {
 
 
 
-UInt256 setCompact(int32_t nCompact)
+UInt256 expand(int32_t nCompact)
 {
     int nSize = nCompact >> 24;
     UInt256 nWord = UINT256_ZERO;
@@ -155,7 +130,7 @@ UInt256 setCompact(int32_t nCompact)
     return nWord;
 }
 
-uint8_t bits(UInt256 number)
+int bits(UInt256 number)
 {
     for (int pos = 8 - 1; pos >= 0; pos--) {
         if (number.u32[pos]) {
@@ -169,7 +144,7 @@ uint8_t bits(UInt256 number)
     return 0;
 }
 
-int32_t getCompact(UInt256 number)
+int32_t compact(UInt256 number)
 {
     int nSize = (bits(number) + 7) / 8;
     uint32_t nCompact = 0;
@@ -219,8 +194,7 @@ UInt256 subtract(UInt256 a, UInt256 b) {
     return add(a,addOne(neg(b)));
 }
 
-
-UInt256 divide (UInt256 a,UInt256 b)
+UInt256 divide(UInt256 a, UInt256 b)
 {
     UInt256 div = b;     // make a copy, so we can shift.
     UInt256 num = a;     // make a copy, so we can subtract.
@@ -228,10 +202,9 @@ UInt256 divide (UInt256 a,UInt256 b)
     int num_bits = bits(num);
     int div_bits = bits(div);
     assert (div_bits != 0);
-    if (div_bits > num_bits) // the result is certainly 0.
-        return r;
-    uint8_t shift = num_bits - div_bits;
-    UInt256 temp =shiftLeft(div, shift); // shift so that div and nun align.
+    if (div_bits > num_bits) return r; // the result is certainly 0.
+    int shift = num_bits - div_bits;
+    UInt256 temp = shiftLeft(div, shift); // shift so that div and nun align.
     div = temp;
     while (shift >= 0) {
         if (uint256_supeq(num,div)) {
@@ -245,7 +218,7 @@ UInt256 divide (UInt256 a,UInt256 b)
     return r;
 }
 
-UInt256 multiplyThis32 (UInt256 a,uint32_t b)
+UInt256 multiply(UInt256 a, uint32_t b)
 {
     uint64_t carry = 0;
     for (int i = 0; i < 8; i++) {
@@ -255,8 +228,6 @@ UInt256 multiplyThis32 (UInt256 a,uint32_t b)
     }
     return a;
 }
-
-
 
 // buf must contain either a serialized merkleblock or header
 // returns a merkle block struct that must be freed by calling BRMerkleBlockFree()
@@ -425,39 +396,6 @@ static UInt256 _BRMerkleBlockRootR(const BRMerkleBlock *block, size_t *hashIdx, 
     return md;
 }
 
-//enum { nMedianTimeSpan = 11 };
-void Csort(int *number, int n) {
-
-    /* Sort the given array number, of length n */
-    int temp = 0, j, i;
-
-    for (i = 1; i < n; i++) {
-        for (j = 0; j < n - i; j++) {
-            if (number[j] > number[j + 1]) {
-                temp = number[j];
-                number[j] = number[j + 1];
-                number[j + 1] = temp;
-            }
-        }
-    }
-}
-
-
-int64_t GetMedianTimePast(BRMerkleBlock *pindex) {
-    int64_t pmedian[11];
-    int64_t *pbegin = &pmedian[11];
-    int64_t *pend = &pmedian[11];
-
-   // const BRMerkleBlock *pindex = this;
-    for (int i = 0; i < 11 && pindex;
-         i++, pindex = pindex->prevBlock.u64) {
-        *(--pbegin) = pindex->height;
-    }
-
-    Csort(pbegin, pend);
-    return pbegin[(pend - pbegin) / 2];
-}
-
 // true if merkle tree and timestamp are valid, and proof-of-work matches the stated difficulty target
 // NOTE: this only checks if the block difficulty matches the difficulty target in the header, it does not check if the
 // target is correct for the block's height in the chain - use BRMerkleBlockVerifyDifficulty() for that
@@ -472,10 +410,6 @@ int BRMerkleBlockIsValid(const BRMerkleBlock *block, uint32_t currentTime)
     size_t hashIdx = 0, flagIdx = 0;
     UInt256 merkleRoot = _BRMerkleBlockRootR(block, &hashIdx, &flagIdx, 0), t = UINT256_ZERO;
     int r = 1;
-
-
-
-
 
     // check if merkle root is correct
     if (block->totalTx > 0 && ! UInt256Eq(merkleRoot, block->merkleRoot)) r = 0;
@@ -527,118 +461,88 @@ static inline int InvertLowestOne(int n) {
                         : InvertLowestOne(height);
 }
 
+inline static UInt256 targetToWork(uint32_t target) {
+    UInt256 bnTarget = expand(target);
+    // We need to compute 2**256 / (bnTarget+1), but we can't represent 2**256
+    // as it's too large for a UInt256. However, as 2**256 is at least as
+    // large as bnTarget+1, it is equal to ((2**256 - bnTarget - 1) /
+    // (bnTarget+1)) + 1, or ~bnTarget / (nTarget+1) + 1.
+    return addOne(divide(neg(bnTarget), addOne(bnTarget)));
+}
 
+inline static UInt256 workToTarget(UInt256 work)
+{
+    // We need to compute T = (2^256 / W) - 1 but 2^256 doesn't fit in 256 bits.
+    // By expressing 1 as W / W, we get (2^256 - W) / W, and we can compute
+    // 2^256 - W as the complement of W.
+    return divide(neg(work), work);
+}
 
+// To reduce the impact of timestamp manipulation, we select the block we are
+// basing our computation on via a median of 3.
+// Reference: http://github.com/Bitcoin-ABC/bitcoin-abc/master/src/pow.cpp#L201
+inline static const BRMerkleBlock *medianBlock(const BRMerkleBlock *b0, const BRSet *blockSet)
+{
+    const BRMerkleBlock *tmp, *b1, *b2;
+
+    b1 = (b0) ? BRSetGet(blockSet, &b0->prevBlock) : NULL;
+    b2 = (b1) ? BRSetGet(blockSet, &b1->prevBlock) : NULL;
+
+    if (b0 && b2 && b0->timestamp > b2->timestamp) tmp = b0, b0 = b2, b2 = tmp;
+    if (b0 && b1 && b0->timestamp > b1->timestamp) tmp = b0, b0 = b1, b1 = tmp;
+    if (b1 && b2 && b1->timestamp > b2->timestamp) tmp = b1, b1 = b2, b2 = tmp;
+
+    return (b0 && b1 && b2) ? b1 : NULL;
+}
+
+inline static const BRMerkleBlock *ancestor(const BRMerkleBlock *block, int jumps, const BRSet *blockSet)
+{
+    for (int i = 0; block && i < jumps; i++) block = BRSetGet(blockSet, &block->prevBlock);
+    return block;
+}
+
+inline static UInt256 averageWork(const BRMerkleBlock *top, const BRMerkleBlock *bottom, const BRSet *blockSet)
+{
+    uint32_t time = (top && bottom) ? top->timestamp - bottom->timestamp : 0;
+
+    // Sanitize excessive numbers
+    if (time > 288*TARGET_SPACING) time = 288*TARGET_SPACING;
+    if (time < 72*TARGET_SPACING) time =  72*TARGET_SPACING;
+
+    // Calculate total work since bottom block to top block
+    UInt256 work = UINT256_ZERO;
+    for (const BRMerkleBlock *b = top; b && b != bottom; b = BRSetGet(blockSet, &b->prevBlock)) {
+        work = add(work, targetToWork(b->target));
+    }
+
+    UInt256 t = UINT256_ZERO;
+    t.u32[0] = time;
+
+    return divide(multiply(work, TARGET_SPACING), t);
+}
 
 // verifies the block difficulty target is correct for the block's position in the chain
-// transitionTime is the timestamp of the block at the previous difficulty transition
-// transitionTime may be 0 if block->height is not a multiple of BLOCK_DIFFICULTY_INTERVAL
-//
-// The difficulty target algorithm works as follows:
-// The target must be the same as in the previous block unless the block's height is a multiple of 2016. Every 2016
-// blocks there is a difficulty transition where a new difficulty is calculated. The new target is the previous target
-// multiplied by the time between the last transition block's timestamp and this one (in seconds), divided by the
-// targeted time between transitions (14*24*60*60 seconds). If the new difficulty is more than 4x or less than 1/4 of
-// the previous difficulty, the change is limited to either 4x or 1/4. There is also a minimum difficulty value
-// intuitively named MAX_PROOF_OF_WORK... since larger values are less difficult.
-int BRMerkleBlockVerifyDifficulty(const BRMerkleBlock *block, const BRMerkleBlock *previous, uint32_t transitionTime)
+int BRMerkleBlockVerifyDifficulty(const BRMerkleBlock *block, const BRSet *blockSet)
 {
-    int r = 1;
-    
-    assert(block != NULL);
-    assert(previous != NULL);
-    
-    if (! previous || !UInt256Eq(block->prevBlock, previous->blockHash) || block->height != previous->height + 1) r = 0;
-    if (r && (block->height % BLOCK_DIFFICULTY_INTERVAL) == 0 && transitionTime == 0) r = 0;
-    
-#if BITCOIN_TESTNET
-    // TODO: implement testnet difficulty rule check
-    return r; // don't worry about difficulty on testnet for now
-#endif
-    
-    if (r && (block->height % BLOCK_DIFFICULTY_INTERVAL) == 0) {
-        // target is in "compact" format, where the most significant byte is the size of resulting value in bytes, next
-        // bit is the sign, and the remaining 23bits is the value after having been right shifted by (size - 3)*8 bits
-        static const uint32_t maxsize = MAX_PROOF_OF_WORK >> 24, maxtarget = MAX_PROOF_OF_WORK & 0x00ffffff;
-        int timespan = (int)((int64_t)previous->timestamp - (int64_t)transitionTime), size = previous->target >> 24;
-        uint64_t target = previous->target & 0x00ffffff;
-    
-        // limit difficulty transition to -75% or +400%
-        if (timespan < TARGET_TIMESPAN/4) timespan = TARGET_TIMESPAN/4;
-        if (timespan > TARGET_TIMESPAN*4) timespan = TARGET_TIMESPAN*4;
-    
-        // TARGET_TIMESPAN happens to be a multiple of 256, and since timespan is at least TARGET_TIMESPAN/4, we don't
-        // lose precision when target is multiplied by timespan and then divided by TARGET_TIMESPAN/256
-        target *= timespan;
-        target /= TARGET_TIMESPAN >> 8;
-        size--; // decrement size since we only divided by TARGET_TIMESPAN/256
-        while (size < 1 || target > 0x007fffff) target >>= 8, size++; // normalize target for "compact" format
-    
-        // limit to MAX_PROOF_OF_WORK
-        if (size > maxsize || (size == maxsize && target > maxtarget)) target = maxtarget, size = maxsize;
-    
-        if (block->target != ((uint32_t)target | size << 24)) r = 0;
+    if (block->height <= DAA_HEIGHT) return 1;
 
+    const BRMerkleBlock *top = medianBlock(ancestor(block, 1, blockSet), blockSet);
+    const BRMerkleBlock *bottom = medianBlock(ancestor(block, 145, blockSet), blockSet);
 
-    }
-    else if (r && block->target != previous->target) r = 0;
+    UInt256 work = averageWork(top, bottom, blockSet);
 
-   /* // If producing the last 6 block took less than 12h, we keep the same
-    // difficulty.
+    int32_t target = compact(workToTarget(work));
+    if (target > MAX_PROOF_OF_WORK) target = MAX_PROOF_OF_WORK;
 
-    //Note get the ancestor!
-    const BRMerkleBlock *pindex6 = GetAncestor(previous->height-7, previous->height, previous);
+    if (top && bottom && block->target != target) return 0;
 
-    int64_t mtp6blocks = GetMedianTimePast(previous) - GetMedianTimePast(pindex6);
-    if (mtp6blocks < (12*3600))
-        r=0;
-    else r=1;
-
-        UInt256 nPow;
-    getCompact(nPow);
-    nPow =add(nPow, (shiftRight(nPow, 2)));
-
-    UInt256 bnPowLimit = setCompact(MAX_PROOF_OF_WORK);
-    uint32_t nPowCompare = getCompact(nPow);
-    if (nPowCompare > MAX_PROOF_OF_WORK){ nPow = bnPowLimit;
-        r= 0;}
-*/
-
-    return r;
-}
-/*
-uint32_t GetNextCashWorkRequired(const BRMerkleBlock *block, const BRMerkleBlock *previous, uint32_t transitionTime) {
-// This cannot handle the genesis block and early blocks in general.
-assert(pindexPrev);
-
-
-
-// Compute the difficulty based on the full adjustement interval.
-const uint32_t nHeight = previous->height;
-assert(nHeight >= params.DifficultyAdjustmentInterval());
-
-// Get the last suitable block of the difficulty interval.
-const BRMerkleBlock *pindexLast = GetSuitableBlock(previous);
-assert(pindexLast);
-
-// Get the first suitable block of the difficulty interval.
-uint32_t nHeightFirst = nHeight - 144;
-const BRMerkleBlock *pindexFirst =
-        GetSuitableBlock(GetAncestor(pindexLast));
-assert(pindexFirst);
-
-// Compute the target based on time and work done during the interval.
-const arith_uint256 nextTarget =
-        ComputeTarget(pindexFirst, pindexLast, params);
-
-const UInt256 powLimit = UintToArith256(params.powLimit);
-if (nextTarget > powLimit) {
-return powLimit.GetCompact();
+    return 1;
 }
 
-return nextTarget.GetCompact();
-}*/
-
+int BRMerkleBlockVerifyDifficultyTestNet(const BRMerkleBlock *block, const BRSet *blockSet)
+{
+    return 1;
+}
 
 // frees memory allocated by BRMerkleBlockParse
 void BRMerkleBlockFree(BRMerkleBlock *block)
